@@ -12,10 +12,9 @@ from optimizer import Optimizer
 from saver import Saver
 from domain import Domain
 
-class DesignController(object):
-    """Controls the execution of a LN simulation."""
+class DeepDesignController(object):
 
-    def __init__(self, eval_sim=None, train_sim=None):
+    def __init__(self):
 
       self._config_parser = LatNetConfigParser()
       self._train_sim = train_sim
@@ -81,26 +80,7 @@ class DesignController(object):
             choices=[9], default=9)
 
 
-    def _finish_simulation(self, subdomains, summary_receiver):
-      pass
-
-    def _load_sim(self):
-      pass
-
-    def run(self):
-
-      # parse config
-      args = sys.argv[1:]
-      self.config = self._config_parser.parse(args)
-     
-      if self.config.run_mode == "train":
-        self.train(self.config)
-      elif self.config.run_mode == "eval":
-        self.eval(self.config)
-      elif self.config.run_mode == "design":
-        self.design(self.config)
-
-    def train(self, config):
+    def train(self):
 
       self.network = LatNet(self.config)
 

@@ -8,109 +8,99 @@ from tqdm import *
 from collections import Counter
 
 class DataGenerator:
-  def __init__(self, run_script, num_runs=1000, availible_cpu_cores=4, needs_gpu=False, availible_gpus=[0]):
-    self.pl = []
-    self.running_pl = []
-    self.needs_gpu = needs_gpu
-    self.availible_cpu_cores=availible_cpu_cores
-    self.availible_gpus=availible_gpus
-    self.start_time = 0
+  def __init__(self, config, run_script):
+    self.running_p = []
 
-  def start_next(self, gpu):
-    for i in xrange(len(self.pl)):
-      if self.pl[i].get_status() == "Not Started":
-        self.pl[i].start(gpu)
-        break
+    self.run_script          = run_script
+    self.save_dir            = config.save_dir + '/' + run_script.split('.')[0] + '/'
+    self.num_runs            = config.num_runs
+    self.needs_gpu           = config.needs_gpu
+    self.availible_cpu_cores = config.availible_cpu_cores
+    self.availible_gpus      = map(int, config.availible_gpus.split(','))
 
   def find_free_gpu(self):
     used_gpus = []
-    for i in xrange(len(self.pl)):
-      if self.pl[i].get_status() == "Running":
-        used_gpus.append(self.pl[i].get_gpu())
+    for p in self.running_p:
+      if p.get_status() == "Running":
+        used_gpus.append(p.get_gpu())
     free_gpus = list(Counter(self.availible_gpus) - Counter(used_gpus)) 
     return free_gpus
 
-  def num_finished_processes(self):
-    proc = 0
-    for i in xrange(len(self.pl)):
-      if self.pl[i].get_status() == "Finished" and self.pl[i].get_return_status() == "SUCCESS":
-        proc += 1
-    return proc
+  def find_free_cpu(self):
+    return self.availible_cpu_cores - len(self.running_p)
 
-  def num_failed_processes(self):
-    proc = 0
-    for i in xrange(len(self.pl)):
-      if self.pl[i].get_status() == "Finished" and self.pl[i].get_return_status() == "FAIL":
-        proc += 1
-    return proc
+  def start_process(self, gpu=0):
+    all_files = glob.glob(self.save_dir + '*.npz')
+    while True:
+      save_file = self.save_dir + str(np.random.randint(0,1000000)).zfill(6)
+      if save_file + ".npz" not in all_files:
+        break
+    
+    proc = Process([self.run_script, '--save_file=' + save_file])
+    proc.start()
+    self.running_p.append(proc)
 
-  def num_running_processes(self):
-    proc = 0
-    for i in xrange(len(self.pl)):
-      if self.pl[i].get_status() == "Running":
-        proc += 1
-    return proc
+  def needed_runs_left(self):
+    all_files = glob.glob(self.save_dir + '*.npz')
+    return len(all_files) - self.num_runs
+   
+  def update_p_status(self):
+    for p in self.running_p:
+      p.update_status()
 
-  def num_unstarted_processes(self):
-    proc = 0
-    for i in xrange(len(self.pl)):
-      if self.pl[i].get_status() == "Not Started":
-        proc += 1
-    return proc
-
-  def percent_complete(self):
-    rc = -.01
-    if self.num_finished_processes() > 0:
-      rc = self.num_finished_processes() / float(len(self.pl))
-    return rc * 100.0
-
-  def run_time(self):
-    return time.time() - self.start_time
-
-  def time_left(self):
-    tl = -1
-    pc = self.percent_complete()
-    if pc > 0:
-      tl = (time.time() - self.start_time) * (1.0/(pc/100.0)) - self.run_time()
-    return tl
-
-  def time_string(self, tl):
-    tl = int(tl)
-    if tl < 0:
-      tl = 0
-    seconds = tl % 60 
-    tl = (tl - seconds)/60
-    mins = tl % 60 
-    tl = (tl - mins)/60
-    hours = tl % 24
-    days = (tl - hours)/24
-    return    ("(" + str(days).zfill(3) + ":" + str(hours).zfill(2) 
-             + ":" + str(mins).zfill(2) + ":" + str(seconds).zfill(2) + ")")
- 
-  def update_pl_status(self):
-    for i in xrange(len(self.pl)):
-      self.pl[i].update_status()
-
-  def print_que_status(self):
-    os.system('clear')
-    print("QUE STATUS")
-    print(colored("Num Finished Success: " + str(self.num_finished_processes()), 'green'))
-    print(colored("Num Finished Fail:    " + str(self.num_failed_processes()), 'red'))
-    print(colored("Num Running:          " + str(self.num_running_processes()), 'yellow'))
-    print(colored("Num Left:             " + str(self.num_unstarted_processes()), 'blue'))
-    print(colored("Percent Complete:     " + str(self.percent_complete()), 'blue'))
-    print(colored("Time Left (D:H:M:S):  " + self.time_string(self.time_left()), 'blue'))
-    print(colored("Run Time  (D:H:M:S):  " + self.time_string(self.run_time()), 'blue'))
- 
+  def remove_finised_p(self):
+    remove_list = []
+    for i in xrange(len(self.running_p)):
+      if self.running_p[i].status == "Finished":
+        remove_list.append(i)
+    self.running_p = [i for j, i in enumerate(self.running_p) if j not in remove_list]
+    
   def start_que_runner(self):
     self.start_time = time.time()
-    while True:
-      time.sleep(.1)
-      free_gpus = self.find_free_gpu()
-      for gpu in free_gpus:
-        self.start_next(gpu)
-      self.update_pl_status()
-      self.print_que_status()
-      
+    needed_simulations = self.needed_runs_left()
+    for i in tqdm(xrange(needed_simulations)):
+      while True:
+        if self.needs_gpu:
+          free_gpus = self.find_free_gpu()
+          if len(free_gpus) > 0:
+            self.start_gpu(free_gpus[0])
+            break
+        else:
+          if find_free_cpu > 0:
+            self.start_cpu()
+        time.sleep(.1)
 
+class Process:
+  def __init__(self, cmd):
+    self.cmd = cmd
+    self.status = "Not Started"
+    self.gpu = -1
+    self.process = None
+    self.return_status = "NONE"
+
+  def start(self, gpu=0):
+    self.process = ps.subprocess.Popen(self.cmd, stdout=ps.subprocess.PIPE)
+    self.pid = self.process.pid
+
+    self.status = "Running"
+    self.start_time = time.time()
+    self.gpu = gpu
+
+  def update_status(self):
+    if self.status == "Running":
+      if self.process.poll() is not None:
+        self.status = "Finished"
+        if self.process.poll() == 0:
+          self.return_status = "SUCCESS"
+        else:
+          self.return_status = "FAIL"
+
+  def get_pid(self):
+    return self.pid
+
+  def get_status(self):
+    return self.status
+
+  def get_gpu(self):
+    return self.gpu
 
