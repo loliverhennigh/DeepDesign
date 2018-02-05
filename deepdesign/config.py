@@ -5,7 +5,7 @@ import os
 import re
 
 
-class LatNetConfig(argparse.Namespace):
+class DesignConfig(argparse.Namespace):
     """Specifies the configuration of a LatNet simulation.
 
     This class carries all settings, specified programmatically from a script

@@ -21,151 +21,97 @@ class DeepDesignController(object):
       self._eval_sim = eval_sim
      
       group = self._config_parser.add_group('Basic Stuff')
-      group.add_argument('--run_mode', help='all modes', type=str,
-            choices=['generate_data', 'train', 'eval'], default='train')
-      group.add_argument('--sailfish_sim_dir', help='train mode', type=str,
-                        default='/data/sailfish_sim/')
-      group.add_argument('--latnet_network_dir', help='all mode', type=str,
+      group.add_argument('--mode', help='all modes', type=str,
+            choices=['train', 'design', 'eval'], default='train')
+      group.add_argument('--train_data_dir', help='train mode', type=str,
+                        default='./')
+      group.add_argument('--network_dir', help='all mode', type=str,
                         default='./network_checkpoint')
-      group.add_argument('--latnet_sim_dir', help='eval mode', type=str,
-                        default='./latnet_simulation')
-
       
       group = self._config_parser.add_group('Network Details')
+      group.add_argument('--input_shape', help='all mode', type=str,
+                        default='512x512')
+      group.add_argument('--output_shape', help='all mode', type=str,
+                        default='512x512')
       group.add_argument('--network_name', help='all mode', type=str,
                         default='basic_network')
 
-      group = self._config_parser.add_group('Simulation Details')
-      group.add_argument('--sim_shape', help='all mode', type=str,
-                        default='512x512')
-      group.add_argument('--visc', help='all mode', type=float,
-                        default=0.1)
-      group.add_argument('--max_sim_iters', help='all mode', type=int,
-                        default=50000)
-      group.add_argument('--lb_to_ln', help='all mode', type=int,
-                        default=120)
-
-      group = self._config_parser.add_group('Saver Details')
-      group.add_argument('--save_freq', help='all mode', type=int, 
-                        default=1000)
-
-      group = self._config_parser.add_group('Train Details')
-      group.add_argument('--seq_length', help='all mode', type=int, 
-                        default=5)
+      group = self._config_parser.add_group('Network Train Details')
+      group.add_argument('--train_epochs', help='all mode', type=int,
+                        default=200)
       group.add_argument('--batch_size', help='all mode', type=int,
                         default=2)
-      group.add_argument('--optimizer', help='all mode', type=str,
-                        default='adam')
       group.add_argument('--lr', help='all mode', type=float,
                         default=0.0015)
-      group.add_argument('--train_iterations', help='all mode', type=int,
-                        default=1000000)
+      group.add_argument('--optimizer', help='all mode', type=str,
+                        default='adam')
 
+      
       group = self._config_parser.add_group('Data Queue Details')
-      group.add_argument('--gpu_fraction', help='all mode', type=float,
-                        default=0.85)
-      group.add_argument('--num_simulations', help='all mode', type=int,
-                        default=2)
       group.add_argument('--max_queue', help='all mode', type=int,
-                        default=100)
-      group.add_argument('--new_sim_epochs', help='all mode', type=int,
                         default=100)
       group.add_argument('--nr_threads', help='all mode', type=int,
                         default=5)
+      
+      group = self._config_parser.add_group('Data Generate Details')
+      group.add_argument('--nr_cpu_threads', help='all mode', type=int,
+                        default=5)
+      group.add_argument('--gpus', help='all mode', type=str
+                        default='1')
 
-      group = self._config_parser.add_group('Input Details')
-      group.add_argument('--input_shape', help='all mode', type=str,
-                         default='256x256')
-      group.add_argument('--lattice_q', help='all mode', type=int,
-            choices=[9], default=9)
-
+    def run(self):
 
     def train(self):
 
-      self.network = LatNet(self.config)
+      # make data set
+      self.data_generator = DataGenerator(self.config, self.)
+      self.data_generator.make_param_data(self._optimize_param)
+      self.data_generator.make_sim_data(self._sim_param, self._sim)
 
-      with tf.Graph().as_default():
+      # make networks
+      self.param_network = ParamNet(self.config)
+      param_in, param_out = self.param_network.train_unroll()
+      self.sim_network = SimNet(self.config)
+      sim_in, sim_out = self.sim_network.train_unroll()
 
-        # global step counter
-        global_step = tf.get_variable('global_step', [], 
-                          initializer=tf.constant_initializer(0), trainable=False)
+      # train sim network 
+      self.sim_data_queue = ParamDataQueue(self.config)
+      self.sim_optimizer = NetOptimizer(self.config, sim_in, sim_out)
+      self.sim_optimizer.train(self.sim_data_queue, sim_in, sim_out) 
 
-        # make inputs
-        self.inputs = Inputs(self.config)
-        self.state_in, self.state_out = self.inputs.state_seq(self.network.state_padding_decrease_seq())
-        self.boundary = self.inputs.boundary()
+      # train param network
+      self.param_data_queue = ParamDataQueue(self.config)
+      self.param_optimizer = NetOptimizer(self.config)
+      self.param_optimizer.train(self.param_data_queue)
 
-        # make network pipe
-        self.pred_state_out = self.network.unroll(self.state_in, self.boundary)
+    def design(self):
 
-        # make loss
-        self.loss = Loss(self.config)
-        self.total_loss = self.loss.mse(self.state_out, self.pred_state_out)
+      # make networks
+      self.param_network = ParamNet(self.config)
+      self.param_network.set_optimize_param(self._param_setup)
+      param_in, param_out = self.param_network.eval_unroll()
 
-        # make train op
-        all_params = tf.trainable_variables()
-        self.optimizer = Optimizer(self.config)
-        self.optimizer.compute_gradients(self.total_loss, all_params)
-        self.train_op = self.optimizer.train_op(all_params, global_step)
+      self.sim_network = SimNet(self.config)
+      self.sim_network.add_design_loss(self._design_loss)
+      sim_out, loss_out = self.sim_network.unroll_design(param_out)
 
-        # start session 
-        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=.8)
-        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
-        init = tf.global_variables_initializer()
-        sess.run(init)
+      # train param network
+      self.design_optimizer = DesignOptimizer(self.config, param_in, sim_out, loss_out)
+      self.design_optimizer.train()
 
-        # make saver
-        graph_def = sess.graph.as_graph_def(add_shapes=True)
-        self.saver = Saver(self.config, self.network.network_config, graph_def)
-        self.saver.load_checkpoint(sess)
 
-        # construct dataset
-        self.dataset = DataQueue(self.config, self._train_sim)
+    def eval_param(self):
+      # make networks
+      self.param_network = ParamNet(self.config)
+      self.param_network.train_unroll()
+      self.sim_network = SimNet(self.config)
+      self.sim_network.train_unroll()
 
-        # train
-        for i in xrange(sess.run(global_step), self.config.train_iterations):
-          _, l = sess.run([self.train_op, self.total_loss], 
-                          feed_dict=self.dataset.minibatch(self.state, self.boundary))
-          if i % 100 == 0:
-            print("current loss is " + str(l))
-            print("current step is " + str(i))
+    def eval_sim(self):
 
-          if i % self.config.save_feq == 0:
-            print("saving...")
-            self.saver.save_summary(sess, self.dataset.minibatch(self.state, self.boundary), sess.run(global_step))
-            self.saver.save_checkpoint(sess, int(sess.run(global_step)))
+    def eval_param_sim(self):
 
-    def eval(self, config):
 
-      self.network = LatNet(self.config)
 
-      with tf.Graph().as_default():
-
-        # make inputs
-        self.inputs = Inputs(self.config)
-        self.state = self.inputs.state()
-        self.boundary = self.inputs.boundary()
-
-        # make network pipe
-        self.y_1, self.compressed_boundary, self.x_2, self.y_2 = self.network.continual_unroll(self.state, self.boundary)
-
-        # start session 
-        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
-        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
-        init = tf.global_variables_initializer()
-        sess.run(init)
-
-        # make saver
-        graph_def = sess.graph.as_graph_def(add_shapes=True)
-        self.saver = Saver(self.config, self.network.network_config, graph_def)
-        self.saver.load_checkpoint()
-
-        # run simulation
-        y_1_g, small_boundary_mul_g, small_boundary_add_g = sess.run([self.y_1, self.small_boundary_mul, self.small_boundary_add], feed_dict=fd)
-        for i in xrange(self.config.max_iters):
-          _, l = sess.run([self.train_op, self.total_loss], 
-                          feed_dict=self.dataset.minibatch(self.state, self.boundary))
-
-    def design(self, config):
 
 
