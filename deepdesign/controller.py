@@ -29,9 +29,11 @@ class DeepDesignController(object):
                         default='./network_checkpoint')
       
       group = self._config_parser.add_group('Network Details')
-      group.add_argument('--input_shape', help='all mode', type=str,
+      group.add_argument('--nr_params', help='all mode', type=int,
+                        default=32)
+      group.add_argument('--geometry_shape', help='all mode', type=str,
                         default='512x512')
-      group.add_argument('--output_shape', help='all mode', type=str,
+      group.add_argument('--geometry_shape', help='all mode', type=str,
                         default='512x512')
       group.add_argument('--network_name', help='all mode', type=str,
                         default='basic_network')
@@ -58,8 +60,6 @@ class DeepDesignController(object):
                         default=5)
       group.add_argument('--gpus', help='all mode', type=str
                         default='1')
-
-    def run(self):
 
     def train(self):
 
